@@ -1,0 +1,230 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/4.0.1/types.yaml
+  - https://raw.githubusercontent.com/cloudify-cosmo/cloudify-openstack-plugin/2.2.0/plugin.yaml
+#  - https://raw.githubusercontent.com/cloudify-incubator/cloudify-utilities-plugin/1.2.5/plugin.yaml
+#  - https://raw.githubusercontent.com/MichaelShn/cloudify-utilities-plugin/patch-tmp/plugin.yaml
+  - https://raw.githubusercontent.com/cloudify-incubator/cloudify-utilities-plugin/1.3.0/plugin.yaml
+
+inputs:
+
+  user:
+    description: >
+      Username for VyOS router
+    default: vyos
+
+  password:
+    description: >
+      Password for VyOS router
+    default: "demo"
+
+  vnf_name:
+    description: >
+      Name of the VNF
+    default: "vyos"
+
+  blueprint_name:
+    description: >
+      Branch blueprint name
+    default: "vyos-vnf"
+
+  deployment_name:
+    description: >
+      branch_deployment name
+    default: {concat: [{get_input: branch_name},"-",{get_input: blueprint_name}]}
+
+  hq_blueprint_name:
+    description: >
+      HQ blueprint name
+    default: "sdwan-hq-service"
+
+  hq_deployment_name:
+    description: >
+      HQ deployment name
+    default: "sdwan-hq-service"
+
+  branch_name:
+    description: >
+      Branch name will be the hostname of the vyos VM
+
+  branch_lan_address:
+    description: >
+      IP address of south bound (LAN for the branch offices) network
+    default: "192.168.101.1/24"
+
+  branch_lan_name:
+    description: >
+      Branch south bound (LAN for the branch offices) network name
+    default: "LAN"
+
+  branch_tunnel_address:
+    description: >
+      Branch tunnel address
+    default: "192.168.200.2/30"
+
+  wan_address:
+    description: >
+      IP address of north bound (WAN for branch offices) network
+    default: "192.168.30.0/24"
+
+  wan_net_name:
+    default: wan_net
+
+  wan_subnet_name:
+    default: wan_net_subnet
+
+  hq_tunnel_address:
+    description: >
+      IP address of HQ tunnel address
+    default: "192.168.200.1/30"
+
+  hq_tunnel_interface:
+    description: >
+      Tunnel interface
+    default: "tun1"
+
+
+  use_existing_vnf_deployment:
+    default: false
+
+node_templates:
+
+  vyos_branch_vnf_deployment:
+    type: cloudify.nodes.DeploymentProxy
+    properties:
+      resource_config:
+        blueprint:
+          id: { get_input: blueprint_name }
+          external_resource: true
+        deployment:
+          id: { get_input: deployment_name }
+          external_resource: {get_input: use_existing_vnf_deployment }
+          inputs:
+            vnf_name: { get_input: branch_name }
+            south_address: {get_input: branch_lan_address}
+            south_net_name: {get_input: branch_lan_name}
+            south_subnet_name: {get_input: branch_lan_name}
+            north_address: {get_input: wan_address}
+            north_net_name: {get_input: wan_net_name}
+            north_subnet_name: {get_input: wan_subnet_name}
+            
+          outputs:
+            vnf_mgmt_ip: vnf_mgmt_ip
+            vnf_south_ip: vnf_lan_ip 
+            vnf_north_ip: vnf_wan_ip
+            vnf_hostname: vnf_hostname
+
+  vyos_vnf_hq_deployment:
+    type: cloudify.nodes.DeploymentProxy
+    properties:
+      resource_config:
+        blueprint:
+          id: { get_input: hq_blueprint_name }
+          external_resource: true
+        deployment:
+          id: { get_input: hq_deployment_name }
+          external_resource: true
+          outputs:
+            vyos_vnf_hq_mgmt_ip: vyos_vnf_hq_mgmt_ip
+            vyos_vnf_hq_wan_ip: vyos_vnf_hq_wan_ip
+            vyos_vnf_hq_username: vyos_vnf_hq_username
+            vyos_vnf_hq_password: vyos_vnf_hq_password
+
+
+  vyos_hq_vnf_vpn_service:
+    type: cloudify.terminal.raw
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            terminal_auth: &terminal_auth_hq
+              user: { get_input: user }
+              password: { get_input: password }
+              ip: { get_attribute: [vyos_vnf_hq_deployment, deployment, outputs, vyos_vnf_hq_mgmt_ip ] }
+              promt_check:
+                - '#'
+                - '$'
+              errors:
+                - "Command fail."
+            calls:
+              - action: exit
+        start:
+          inputs:
+            terminal_auth: *terminal_auth_hq
+            calls:
+              - action: config
+              - template: templates/vyos-vnf-hq-vpn-start.txt
+                params:
+                  TUNNEL_INTERFACE: { get_input: hq_tunnel_interface }
+                  HQ_TUNNEL_ADDRESS: { get_input: hq_tunnel_address }
+                  HQ_TUNNEL_LOCAL_IP: { get_attribute: [vyos_vnf_hq_deployment, deployment, outputs, vyos_vnf_hq_wan_ip] }
+                  HQ_TUNNEL_REMOTE_IP: { get_attribute: [vyos_branch_vnf_deployment, deployment, outputs, vnf_wan_ip] }
+              - action: commit
+              - action: save
+        stop:
+          inputs:
+            terminal_auth: *terminal_auth_hq
+            calls:
+              - action: config
+              - template: templates/vyos-vnf-hq-vpn-start.txt
+                params:
+                  TUNNEL_INTERFACE: { get_input: hq_tunnel_interface }
+              - action: commit
+              - action: save
+    relationships:
+      - type: cloudify.relationships.depends_on
+        target: vyos_vnf_hq_deployment
+      - type: cloudify.relationships.depends_on
+        target: vyos_branch_vnf_deployment
+
+
+  vyos_branch_vnf_vpn_service:
+    type: cloudify.terminal.raw
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            terminal_auth: &terminal_auth_branch
+              user: { get_input: user }
+              password: {get_input: password }
+              ip: { get_attribute: [vyos_branch_vnf_deployment, deployment, outputs, vnf_mgmt_ip ] }
+              promt_check:
+                - '#'
+                - '$'
+              errors:
+                - "Command fail."
+            calls:
+              - action: exit
+        start:
+          inputs:
+            terminal_auth: *terminal_auth_branch
+            calls:
+              - action: config
+              - template: templates/vyos-vnf-branch-vpn-start.txt
+                params:
+                  BRANCH_TUNNEL_ADDRESS: { get_input: branch_tunnel_address }
+                  BRANCH_TUNNEL_LOCAL_IP: { get_attribute: [vyos_branch_vnf_deployment, deployment, outputs, vnf_wan_ip] }
+                  BRANCH_TUNNEL_REMOTE_IP: { get_attribute: [vyos_vnf_hq_deployment, deployment, outputs, vyos_vnf_hq_wan_ip] }
+              - action: commit
+              - action: save
+        stop:
+          inputs:
+            terminal_auth: *terminal_auth_branch
+            calls:
+              - action: config
+              - action: delete interface tunnel tun0
+              - action: commit
+              - action: save
+    relationships:
+      - type: cloudify.relationships.depends_on
+        target: vyos_vnf_hq_deployment
+      - type: cloudify.relationships.depends_on
+        target: vyos_branch_vnf_deployment
+
+
+
+
+
+
+outputs:

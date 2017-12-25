@@ -1,0 +1,182 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/4.0.1/types.yaml
+  - https://raw.githubusercontent.com/cloudify-cosmo/cloudify-openstack-plugin/2.2.0/plugin.yaml
+  - https://raw.githubusercontent.com/cloudify-incubator/cloudify-utilities-plugin/1.3.0/plugin.yaml
+
+
+inputs:
+
+  vyos_image_url:
+    default: "https://s3-eu-west-1.amazonaws.com/cloudify-labs/images/vyos-1.1.7-installed-day0.qcow"
+  
+  vyos_image_name: 
+    default: vyos
+
+  flavor:
+    description: >
+      An Openstack Flavor ID.
+    default: { get_secret: small_image_flavor }
+
+  user:
+    description: >
+      Username for VyOS router
+    default: "vyos"
+
+  password:
+    description: >
+      Password for VyOS router
+    default: "demo"
+
+  vnf_config_port:
+    description: >
+      The port which will be used to configure the VNF
+    default: 47
+
+  vnf_name:
+    description: >
+      Name of the VNF
+    default: "vyos"
+
+  hostname:
+    default: { get_input: vnf_name }
+
+  south_address:
+    description: >
+      IP address of south bound (LAN for the branch offices) network
+    default: "192.168.101.1/24"
+
+  south_net_name:
+    description: >
+      Branch south bound (LAN for the branch offices) network name
+    default: "lan"
+
+  south_subnet_name:
+    description: >
+      Branch south bound (LAN for the branch offices) subnet name
+    default: "lan"
+
+  north_address:
+    description: >
+      IP address of north bound (WAN for branch offices) network
+    default: ""
+
+  north_net_name:
+    description: >
+
+  north_subnet_name:
+    description: >
+
+  use_existing_south_network:
+    default: false
+
+  use_existing_north_network:
+    default: true
+
+
+  blueprint_name:
+    description: >
+      HQ blueprint name
+    default: "openstack-vm-lan"
+
+  deployment_name:
+    description: >
+      HQ blueprint name
+    default: {concat: [{get_input: vnf_name},"-",{get_input: blueprint_name}]}
+
+dsl_definitions:
+
+  openstack_config: &openstack_config
+    username: { get_secret: keystone_username }
+    password: { get_secret: keystone_password }
+    tenant_name: { get_secret: keystone_tenant_name }
+    auth_url: { get_secret: keystone_url }
+    region: { get_secret: region }
+
+
+
+
+node_templates:
+
+  vyos_vnf_deployment:
+    type: cloudify.nodes.DeploymentProxy
+    properties:
+      resource_config:
+        blueprint:
+          id: { get_input: blueprint_name }
+          external_resource: true
+        deployment:
+          id: { get_input: deployment_name }
+          external_resource: false
+          inputs:
+            image_url: {get_input: vyos_image_url}
+            vnf_image_name: {get_input: vyos_image_name}
+            flavor: {get_input: flavor}
+            vnf_config_port: {get_input: vnf_config_port}
+            vnf_name: {get_input: vnf_name}
+            south_address: {get_input: south_address}
+            south_net_name: {get_input: south_net_name}
+            south_subnet_name: {get_input: south_subnet_name}
+            north_address: {get_input: north_address}
+            north_net_name: {get_input: north_net_name}
+            north_subnet_name: {get_input: north_subnet_name}
+            use_existing_south_network: {get_input: use_existing_south_network}
+            use_existing_north_network: {get_input: use_existing_north_network}
+            hostname: {get_input: hostname}
+            
+          outputs:
+            vnf_mgmt_ip: vnf_mgmt_ip_value
+            vnf_south_ip: vnf_south_ip_value
+            vnf_north_ip: vnf_north_ip_value
+            vnf_hostname: vnf_hostname_value
+            vnf_public_ip: vnf_public_ip_value
+
+  vyos_branch_vnf_baseline:
+    type: cloudify.terminal.raw
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            terminal_auth: &terminal_auth
+              user: { get_input: user }
+              password: { get_input: password }
+              ip: { get_attribute: [vyos_vnf_deployment, deployment, outputs, vnf_mgmt_ip_value] }
+              promt_check:
+                - '#'
+                - '$'
+              errors:
+                - "Command fail."
+            calls:
+              - action: exit
+        start:
+          inputs:
+            terminal_auth: *terminal_auth
+            calls:
+              - action: config
+              - template: templates/vyos-vnf-baseline.txt
+                params:
+                  HOSTNAME: {  get_attribute: [vyos_vnf_deployment, deployment, outputs, vnf_hostname_value ]}
+                  LAN_ADDRESS: { get_attribute: [vyos_vnf_deployment, deployment, outputs, vnf_south_ip_value] }
+              - action: commit
+              - action: save
+    relationships:
+      - type: cloudify.relationships.depends_on
+        target: vyos_vnf_deployment
+
+
+
+outputs:
+
+  vnf_mgmt_ip: 
+    value: { get_attribute: [vyos_vnf_deployment, deployment, outputs, vnf_mgmt_ip_value] }
+  vnf_south_ip: 
+    value: { get_attribute: [vyos_vnf_deployment, deployment, outputs, vnf_south_ip_value] }
+  vnf_north_ip: 
+    value: { get_attribute: [vyos_vnf_deployment, deployment, outputs, vnf_north_ip_value] }
+  vnf_public_ip: 
+    value: { get_attribute: [vyos_vnf_deployment, deployment, outputs, vnf_public_ip_value] }
+  vnf_hostname: 
+    value: { get_attribute: [vyos_vnf_deployment, deployment, outputs, vnf_hostname_value] }
+
+
