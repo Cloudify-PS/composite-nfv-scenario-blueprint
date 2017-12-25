@@ -30,7 +30,7 @@ inputs:
   south_address:
     description: >
       IP address of south bound (LAN for the branch offices) network
-    default: "192.168.101.1/24"
+    default: ""
 
   south_net_name:
     description: >
@@ -107,6 +107,34 @@ node_templates:
             vnf_north_ip: vnf_north_ip_value
             vnf_hostname: vnf_hostname_value
             vnf_public_ip: vnf_public_ip_value
+
+  fortigate_vnf_baseline_config:
+    type: cloudify.terminal.raw
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          inputs:
+            terminal_auth: &terminal_auth
+              user: admin
+              password: ''
+              ip: { get_attribute: [fortigate_vnf_deployment, deployment, outputs, vnf_mgmt_ip_value] }
+              promt_check:
+                - '#'
+                - '$'
+              errors:
+                - "Command fail."
+            calls:
+              - action: exit
+        start:
+          inputs:
+            terminal_auth: *terminal_auth
+            calls:
+              - template: templates/fortigate-baseline.txt
+    relationships:
+      - type: cloudify.relationships.depends_on
+        target: fortigate_vnf_deployment
+
+
 
 outputs:
 

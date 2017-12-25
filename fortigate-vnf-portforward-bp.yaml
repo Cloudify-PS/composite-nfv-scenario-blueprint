@@ -1,12 +1,13 @@
 tosca_definitions_version: cloudify_dsl_1_3
 
 imports:
-  - http://www.getcloudify.org/spec/cloudify/4.0.1/types.yaml
+  - http://www.getcloudify.org/spec/cloudify/4.2/types.yaml
   - https://raw.githubusercontent.com/cloudify-cosmo/cloudify-openstack-plugin/2.2.0/plugin.yaml
   - https://raw.githubusercontent.com/cloudify-incubator/cloudify-utilities-plugin/1.3.0/plugin.yaml
 
 
 inputs:
+
 
   portforward_ip:
     type: string
@@ -20,18 +21,36 @@ inputs:
       Port on which service is going to be exposed
     default: '55555'
 
-  baseline-blueprint-name:
+  blueprint_name:
     type: string
     description: >
       Blueprint name of baseline Fortigate VNF
     default: fortigate-vnf-baseline-blueprint
 
-  baseline-deployment-name:
+  deployment_name:
     type: string
     description: >
       Deployment name of baseline Fortigate VNF
     default: fortigate-vnf-baseline-deployment
 
+  south_net_name:
+    description: >
+      Branch south bound (LAN for the branch offices) network name
+    default: "network1"
+
+  south_subnet_name:
+    description: >
+      Branch south bound (LAN for the branch offices) subnetwork name
+    default: "network1_subnet"
+
+
+  north_net_name:
+    description: >
+    default: "public"
+
+  north_subnet_name:
+    description: >
+    default: "public"
 
 node_templates:
 
@@ -40,16 +59,21 @@ node_templates:
     properties:
       resource_config:
         blueprint:
-          id: { get_input: baseline-blueprint-name }
+          id: { get_input: blueprint_name }
           external_resource: true
         deployment:
-          id: { get_input: baseline-deployment-name }
+          id: { get_input: deployment_name }
           external_resource: true
+          inputs:
+            south_address: {get_input: south_address}
+            south_net_name: {get_input: south_net_name}
+            south_subnet_name: {get_input: south_subnet_name}
+            north_address: {get_input: north_address}
+            north_net_name: {get_input: north_net_name}
+            north_subnet_name: {get_input: north_subnet_name}
+            use_existing_north_network: {get_input: use_existing_north_network
           outputs:
             fortigate_vnf_mgmt_ip: mgmt_ip
-
-
-
 
   fortigate_vnf_portforward_service:
     type: cloudify.terminal.raw
@@ -84,3 +108,4 @@ node_templates:
     relationships:
       - type: cloudify.relationships.depends_on
         target: fortigate_vnf_deployment
+
